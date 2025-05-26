@@ -1,14 +1,13 @@
-#!/usr/bin/env python
-
 import json
 import csv
 import logging
-from netboxlabs.diode.sdk.ingester import Device, Interface, IPAddress
+import requests
 
 from collections.abc import Iterable
 from netboxlabs.diode.sdk.ingester import Entity
 from worker.backend import Backend
 from worker.models import Metadata, Policy
+from netboxlabs.diode.sdk.ingester import Device, Interface, IPAddress
 
 
 class LabIntegration(Backend):
@@ -22,12 +21,17 @@ class LabIntegration(Backend):
 
         p = json.loads(policy.model_dump_json())
         method = p.get('config', {}).get('method')
+        logging.info(f"Attempting data extracting using {method.upper()} method")
 
         pdu_list = []
         ''' load method depends on our environment '''
         if method == 'csv':
             filename = p.get('config', {}).get('csv_filename')
             pdu_list = self.load_from_csv(filename)
+        elif method == "api":
+            controller_url = p.get('config', {}).get('controller_url')
+            controller_token = p.get('config', {}).get('controller_token')
+            pdu_list = self.load_from_controller(controller_url, controller_token)
 
         if pdu_list:
             entities=self.transform_to_diode(pdu_list)
@@ -52,6 +56,26 @@ class LabIntegration(Backend):
                     'management_ip': row['management_ip']
                 }
                 pdu_list.append(pdu)
+        return pdu_list
+
+
+    def load_from_controller(self, controller_url: str, controller_token: str) -> list:
+        ''' function to read from the controller and return a list '''
+        pdu_list = []
+        names = []
+        headers = {'Authorization': f'Token {controller_token}' }
+        r = requests.get(controller_url, headers=headers)
+        ''' get the brief list '''
+        if r.status_code == 200:
+            for item in r.json():
+                names.append(item["name"])
+        ''' loop through the brief list to get the individual pdus '''
+        for name in names:
+            iurl = f'{controller_url}?name={name}'
+            r = requests.get(iurl, headers=headers)
+            if r.status_code == 200:     
+                pdu_list.append(r.json())
+
         return pdu_list
 
 
